@@ -1,0 +1,79 @@
+name: Update HAOS Image
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get latest HAOS release and image info
+        id: release
+        run: |
+          RELEASE=$(curl -sf https://api.github.com/repos/home-assistant/operating-system/releases/latest) || {
+            echo "Error: failed to fetch latest release from GitHub API" >&2
+            exit 1
+          }
+          VERSION=$(echo "$RELEASE" | jq -r '.tag_name')
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            echo "Error: could not determine release version" >&2
+            exit 1
+          fi
+          ASSET_NAME="haos_ova-${VERSION}.qcow2.xz"
+          ASSET=$(echo "$RELEASE" | jq --arg name "$ASSET_NAME" '.assets[] | select(.name == $name)')
+          if [ -z "$ASSET" ]; then
+            echo "Error: asset $ASSET_NAME not found in release $VERSION" >&2
+            exit 1
+          fi
+          URL=$(echo "$ASSET" | jq -r '.browser_download_url')
+          SHA256=$(echo "$ASSET" | jq -r '.digest' | sed 's/^sha256://')
+          if [ -z "$SHA256" ] || [ "$SHA256" = "null" ]; then
+            echo "Error: could not determine SHA-256 digest for $ASSET_NAME" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Check if update is needed
+        id: check
+        run: |
+          CURRENT=$(jq -r '.version' image.json)
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          if [ "$CURRENT" = "${{ steps.release.outputs.version }}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update image.json
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          jq -n \
+            --arg version "${{ steps.release.outputs.version }}" \
+            --arg url "${{ steps.release.outputs.url }}" \
+            --arg sha256 "${{ steps.release.outputs.sha256 }}" \
+            '{version: $version, url: $url, sha256: $sha256}' > image.json
+
+      - name: Create Pull Request
+        if: steps.check.outputs.skip == 'false'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "chore: update HAOS image to ${{ steps.release.outputs.version }}"
+          title: "Update HAOS image to ${{ steps.release.outputs.version }}"
+          body: |
+            Automated update of the Home Assistant OS image.
+
+            - **Previous version:** ${{ steps.check.outputs.current }}
+            - **New version:** ${{ steps.release.outputs.version }}
+            - **Image URL:** ${{ steps.release.outputs.url }}
+          branch: update-haos-image
+          delete-branch: true
