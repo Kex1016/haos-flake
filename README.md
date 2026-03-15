@@ -104,6 +104,45 @@ services.haos.guest = {
 };
 ```
 
+### Guest network configuration
+
+By default no network configuration is injected into the guest, so Home
+Assistant OS will rely on its own defaults (which may not configure DHCP
+automatically).  Set `networkConfig` to have haos-flake create a CONFIG drive
+ISO with a NetworkManager keyfile that HAOS applies on every boot.
+
+**DHCP (recommended):**
+
+```nix
+services.haos.guest = {
+  enable = true;
+  networkConfig = {
+    enableDHCP = true;
+  };
+};
+```
+
+**Static IP:**
+
+```nix
+services.haos.guest = {
+  enable = true;
+  networkConfig = {
+    enableDHCP = false;
+    staticIP = "192.168.1.50";
+    prefixLength = 24;
+    gateway = "192.168.1.1";
+    dns = [ "1.1.1.1" "8.8.8.8" ];
+  };
+};
+```
+
+The CONFIG drive ISO is built in the Nix store and attached to the VM as a
+read-only CD-ROM.  Changing `networkConfig` and rebuilding NixOS will create
+a new ISO, but you must delete and recreate the VM (or detach/reattach the
+disk with `virsh`) for the change to take effect, because the systemd service
+is a no-op when the VM already exists.
+
 ### Automatic image updates
 
 A GitHub Actions workflow runs daily and checks the
