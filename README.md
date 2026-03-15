@@ -127,7 +127,3 @@ Attach devices to the running VM:
 ```bash
 sudo haos-attach-usb
 ```
-
-## License
-
-MIT
