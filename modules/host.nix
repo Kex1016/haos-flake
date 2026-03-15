@@ -27,7 +27,6 @@ in
   config = lib.mkIf cfg.enable {
     virtualisation.libvirtd = {
       enable = true;
-      qemu.ovmf.enable = true;
     };
 
     environment.systemPackages = with pkgs; [
