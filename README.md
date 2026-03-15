@@ -15,7 +15,7 @@ Add the flake as an input in your NixOS configuration:
 # flake.nix
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     haos-flake.url = "github:Kex1016/haos-flake";
   };
 
