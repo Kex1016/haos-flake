@@ -134,5 +134,45 @@ in
         echo "VM '${cfg.name}' created successfully."
       '';
     };
+
+    # VM autostart service
+    systemd.services.haos-autostart = {
+      description = "Autostart Home Assistant OS guest VM";
+      after = [
+        "libvirtd.service"
+        "haos-install-guest.service"
+      ];
+      requires = [ "libvirtd.service" ];
+      wantedBy = [ "multi-user.target" ];
+
+      path = [ pkgs.libvirt ];
+
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+      };
+
+      script = ''
+        set -euo pipefail
+
+        # Wait for the VM to exist (created by haos-install-guest)
+        if ! virsh dominfo "${cfg.name}" >/dev/null 2>&1; then
+          echo "VM '${cfg.name}' does not exist, cannot autostart." >&2
+          exit 1
+        fi
+
+        # Check if already running
+        state=$(virsh domstate "${cfg.name}" 2>/dev/null || echo "unknown")
+        if [ "$state" = "running" ]; then
+          echo "VM '${cfg.name}' is already running."
+          exit 0
+        fi
+
+        echo "Starting VM '${cfg.name}'..."
+        virsh start "${cfg.name}"
+        echo "VM '${cfg.name}' started successfully."
+      '';
+    };
+
   };
 }
