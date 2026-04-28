@@ -29,11 +29,19 @@ in
       default = config.services.haos.guest.name or "haos";
       description = "Name of the libvirt guest domain to attach USB devices to.";
     };
+
+    automount = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Automatically attach USB devices to the VM on startup.";
+      };
+    };
   };
 
-  config = lib.mkIf (cfg.enable && cfg.devices != []) {
-    environment.systemPackages = [
-      (pkgs.writeShellScriptBin "haos-attach-usb" ''
+  config = lib.mkIf (cfg.enable && cfg.devices != []) (
+    let
+      attachScript = pkgs.writeShellScriptBin "haos-attach-usb" ''
         set -euo pipefail
         ${lib.concatMapStringsSep "\n" (dev: ''
           echo "Attaching USB device ${dev.vendorId}:${dev.productId} to ${cfg.guestName}..."
@@ -47,7 +55,26 @@ in
         XML
         '') cfg.devices}
         echo "All USB devices attached."
-      '')
-    ];
-  };
+      '';
+    in
+    {
+      environment.systemPackages = [ attachScript ];
+
+      systemd.services.haos-automount = lib.mkIf cfg.automount.enable {
+        description = "Attach USB devices to HAOS guest";
+        after = [ "haos-autostart.service" "libvirtd.service" ];
+        wants = [ "haos-autostart.service" ];
+        wantedBy = [ "multi-user.target" ];
+        path = [ pkgs.libvirt ];
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+        };
+        script = ''
+          sleep 5
+          ${attachScript}/bin/haos-attach-usb
+        '';
+      };
+    }
+  );
 }
