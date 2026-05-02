@@ -7,6 +7,7 @@
 
 let
   cfg = config.services.haos.guest;
+  usbCfg = config.services.haos.usb;
 
   imageInfo = builtins.fromJSON (builtins.readFile ../image.json);
 
@@ -136,7 +137,8 @@ in
     };
 
     # VM autostart service
-    systemd.services.haos-autostart = {
+    # Only used when USB passthrough is NOT enabled (or automount is disabled)
+    systemd.services.haos-autostart = lib.mkIf (!(usbCfg.enable && usbCfg.automount.enable)) {
       description = "Autostart Home Assistant OS guest VM";
       after = [
         "libvirtd.service"
