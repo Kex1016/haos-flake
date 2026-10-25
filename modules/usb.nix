@@ -41,6 +41,16 @@ in
       description = "Name of the libvirt guest domain to attach USB devices to.";
     };
 
+    waitTimeoutSeconds = lib.mkOption {
+      type = lib.types.ints.unsigned;
+      default = 30;
+      description = ''
+        How long to wait at boot for the USB devices to appear before starting
+        the VM anyway. Missing devices never prevent the VM from starting.
+        Set to 0 to not wait at all.
+      '';
+    };
+
     automount = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -82,28 +92,19 @@ in
 
       waitForUsbScript = pkgs.writeShellScriptBin "haos-wait-for-usb" ''
         set -euo pipefail
-        max_attempts=60
-        attempt=0
+        deadline=$((SECONDS + ${toString cfg.waitTimeoutSeconds}))
 
-        ${lib.concatMapStringsSep "\n" (dev: ''
-          while [ $attempt -lt $max_attempts ]; do
-            if lsusb -d ${lsusbId dev} >/dev/null; then
-              echo "USB device ${dev.vendorId}:${dev.productId} is available."
-              break
+        for id in ${lib.concatMapStringsSep " " lsusbId cfg.devices}; do
+          until ${pkgs.usbutils}/bin/lsusb -d "$id" >/dev/null; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "Warning: USB device $id not found, continuing without it." >&2
+              continue 2
             fi
-            echo "Waiting for USB device ${dev.vendorId}:${dev.productId} to be available..."
+            echo "Waiting for USB device $id to be available..."
             sleep 1
-            ((attempt++))
           done
-
-          if [ $attempt -ge $max_attempts ]; then
-            echo "Timeout waiting for USB device ${dev.vendorId}:${dev.productId}" >&2
-            exit 1
-          fi
-          attempt=0
-        '') cfg.devices}
-
-        echo "All USB devices are available."
+          echo "USB device $id is available."
+        done
       '';
     in
     {
