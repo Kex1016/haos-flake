@@ -82,13 +82,31 @@ it is removed.
 
 ## Order of work (one commit each)
 
-1. `fix(guest): clear managed save before start, shut down gracefully`
-2. `fix(usb): match lsusb ids without 0x prefix`
-3. `fix(usb): do not block VM start on missing devices`
-4. `refactor(guest): merge autostart units`
-5. `feat(guest): add explicit xhci usb controller`
-6. `feat(usb): hotplug via udev and templated units`
-7. `docs: document hotplug, shutdown behaviour and migration`
+All steps are done. Checked with `nix flake check` and by evaluating and
+building the systemd units of a test config on nixos-24.05 and
+nixos-unstable; nothing has been run on a real host yet.
+
+1. [x] `fix(guest): clear managed save before start, shut down gracefully`
+2. [x] `fix(usb): match lsusb ids without 0x prefix`
+3. [x] `fix(usb): do not block VM start on missing devices`
+4. [x] `refactor(guest): merge autostart units`
+5. [x] `feat(guest): add explicit xhci usb controller`
+6. [x] `feat(usb): hotplug via udev and templated units`
+7. [x] `docs: document hotplug, shutdown behaviour and migration`
+
+Deviations from the plan above:
+
+- `virtualisation.libvirtd.shutdownTimeout` does not exist on nixos-24.05,
+  so `host.nix` sets `SHUTDOWN_TIMEOUT` on `libvirt-guests` there instead.
+- The USB wait is a single deadline shared by all devices rather than a
+  `seq` loop per device. `haos-autostart` lives in `guest.nix`; `usb.nix`
+  adds the wait as its `preStart` when `automount.enable` is set.
+- `haos-usb attach` adds the hostdev to the persistent definition with
+  `startupPolicy='optional'`, so a stick that is missing at boot cannot stop
+  the VM from starting. Detach only touches the live VM.
+- The xhci migration for existing VMs is done with `virsh edit` (replace the
+  existing USB controller) rather than `attach-device`, because the VM
+  already has a USB controller at index 0. See the README.
 
 ## Verification (needs a NixOS host)
 
