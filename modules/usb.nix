@@ -58,36 +58,101 @@ in
         description = "Automatically attach USB devices to the VM on startup.";
       };
     };
+
+    hotplug = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = cfg.enable;
+        defaultText = lib.literalExpression "config.services.haos.usb.enable";
+        description = ''
+          Attach the devices to the running VM when they are plugged in, and
+          detach them when they are unplugged, using udev rules.
+        '';
+      };
+    };
   };
 
   config = lib.mkIf (cfg.enable && cfg.devices != [ ]) (
     let
+      # haos-usb attach|detach <vendor-id> <product-id>
+      # Idempotent, and a no-op while the VM is not running. Attaching also
+      # adds the device to the persistent definition with an optional startup
+      # policy, so it comes back after a restart but never blocks one.
+      usbScript = pkgs.writeShellScriptBin "haos-usb" ''
+        set -euo pipefail
+        PATH=${
+          lib.makeBinPath [
+            pkgs.libvirt
+            pkgs.gnugrep
+          ]
+        }:$PATH
+        dom="${cfg.guestName}"
+
+        if [ $# -ne 3 ]; then
+          echo "Usage: haos-usb attach|detach <vendor-id> <product-id>" >&2
+          exit 2
+        fi
+        action=$1
+        vendor=''${2#0x}
+        vendor=''${vendor,,}
+        product=''${3#0x}
+        product=''${product,,}
+
+        hostdev="<hostdev mode='subsystem' type='usb'>
+          <source startupPolicy='optional'>
+            <vendor id='0x$vendor'/>
+            <product id='0x$product'/>
+          </source>
+        </hostdev>"
+
+        # True if the domain XML given as $1 contains the device
+        has_device() {
+          grep -A1 "<vendor id='0x$vendor'/>" <<<"$1" | grep "<product id='0x$product'/>" >/dev/null
+        }
+
+        if ! virsh dominfo "$dom" >/dev/null 2>&1; then
+          echo "VM '$dom' does not exist, skipping $vendor:$product."
+          exit 0
+        fi
+        running=false
+        if [ "$(virsh domstate "$dom")" = "running" ]; then
+          running=true
+        fi
+
+        case "$action" in
+          attach)
+            if ! has_device "$(virsh dumpxml --inactive "$dom")"; then
+              echo "Adding USB device $vendor:$product to the '$dom' definition..."
+              virsh attach-device "$dom" /dev/stdin --config <<<"$hostdev"
+            fi
+            if ! $running; then
+              echo "VM '$dom' is not running, $vendor:$product will be attached when it starts."
+            elif has_device "$(virsh dumpxml "$dom")"; then
+              echo "USB device $vendor:$product is already attached to '$dom'."
+            else
+              echo "Attaching USB device $vendor:$product to '$dom'..."
+              virsh attach-device "$dom" /dev/stdin --live <<<"$hostdev"
+            fi
+            ;;
+          detach)
+            if $running && has_device "$(virsh dumpxml "$dom")"; then
+              echo "Detaching USB device $vendor:$product from '$dom'..."
+              virsh detach-device "$dom" /dev/stdin --live <<<"$hostdev" ||
+                echo "USB device $vendor:$product was already gone."
+            fi
+            ;;
+          *)
+            echo "Usage: haos-usb attach|detach <vendor-id> <product-id>" >&2
+            exit 2
+            ;;
+        esac
+      '';
+
       attachScript = pkgs.writeShellScriptBin "haos-attach-usb" ''
         set -euo pipefail
-        # Wait for the VM to exist (created by haos-install-guest)
-        if ! virsh dominfo "${cfg.guestName}" >/dev/null 2>&1; then
-          echo "VM '${cfg.guestName}' does not exist, cannot autostart." >&2
-          exit 1
-        fi
-        # Wait for the VM to start [blocking loop]
-        while ! virsh domstate "${cfg.guestName}" | grep -q "running"; do
-          echo "Waiting for VM '${cfg.guestName}' to start..."
-          sleep 1
-        done
-        # Sleep for 5 seconds to wait for the VM to initialize its USB controller
-        sleep 5
-        ${lib.concatMapStringsSep "\n" (dev: ''
-            echo "Attaching USB device ${dev.vendorId}:${dev.productId} to ${cfg.guestName}..."
-            ${pkgs.libvirt}/bin/virsh attach-device "${cfg.guestName}" /dev/stdin <<'XML'
-            <hostdev mode='subsystem' type='usb'>
-              <source>
-                <vendor id='${dev.vendorId}'/>
-                <product id='${dev.productId}'/>
-              </source>
-            </hostdev>
-          XML
-        '') cfg.devices}
-        echo "All USB devices attached."
+        ${lib.concatMapStringsSep "\n" (
+          dev: "${usbScript}/bin/haos-usb attach ${bareId dev.vendorId} ${bareId dev.productId}"
+        ) cfg.devices}
       '';
 
       waitForUsbScript = pkgs.writeShellScriptBin "haos-wait-for-usb" ''
@@ -109,6 +174,7 @@ in
     in
     {
       environment.systemPackages = [
+        usbScript
         attachScript
         waitForUsbScript
       ];
@@ -139,6 +205,43 @@ in
           ${attachScript}/bin/haos-attach-usb
         '';
       };
+
+      # Instances are named <vendor-id>-<product-id>, e.g. 10c4-ea60
+      systemd.services."haos-usb-attach@" = lib.mkIf cfg.hotplug.enable {
+        description = "Attach USB device %i to HAOS guest";
+        after = [ "libvirtd.service" ];
+        serviceConfig.Type = "oneshot";
+        scriptArgs = "%i";
+        script = ''
+          ${usbScript}/bin/haos-usb attach "''${1%-*}" "''${1#*-}"
+        '';
+      };
+
+      systemd.services."haos-usb-detach@" = lib.mkIf cfg.hotplug.enable {
+        description = "Detach USB device %i from HAOS guest";
+        after = [ "libvirtd.service" ];
+        serviceConfig.Type = "oneshot";
+        scriptArgs = "%i";
+        script = ''
+          ${usbScript}/bin/haos-usb detach "''${1%-*}" "''${1#*-}"
+        '';
+      };
+
+      # SYSTEMD_WANTS only acts on add, so removal starts its unit directly.
+      # libvirt handles the /dev/bus/usb permissions itself.
+      services.udev.extraRules = lib.mkIf cfg.hotplug.enable (
+        lib.concatMapStrings (
+          dev:
+          let
+            match = ''SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{ID_VENDOR_ID}=="${bareId dev.vendorId}", ENV{ID_MODEL_ID}=="${bareId dev.productId}"'';
+            instance = "${bareId dev.vendorId}-${bareId dev.productId}";
+          in
+          ''
+            ACTION=="add", ${match}, TAG+="systemd", ENV{SYSTEMD_WANTS}+="haos-usb-attach@${instance}.service"
+            ACTION=="remove", ${match}, RUN+="${config.systemd.package}/bin/systemctl --no-block start haos-usb-detach@${instance}.service"
+          ''
+        ) cfg.devices
+      );
     }
   );
 }
