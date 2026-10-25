@@ -7,6 +7,10 @@
 
 let
   cfg = config.services.haos.usb;
+
+  # lsusb and udev print ids without the 0x prefix
+  bareId = id: lib.removePrefix "0x" (lib.toLower id);
+  lsusbId = dev: "${bareId dev.vendorId}:${bareId dev.productId}";
 in
 {
   options.services.haos.usb = {
@@ -83,7 +87,7 @@ in
 
         ${lib.concatMapStringsSep "\n" (dev: ''
           while [ $attempt -lt $max_attempts ]; do
-            if lsusb | grep -q "${dev.vendorId}:${dev.productId}"; then
+            if lsusb -d ${lsusbId dev} >/dev/null; then
               echo "USB device ${dev.vendorId}:${dev.productId} is available."
               break
             fi
