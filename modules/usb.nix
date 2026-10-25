@@ -146,6 +146,9 @@ in
           echo "Waiting for USB devices to be available..."
           ${waitForUsbScript}/bin/haos-wait-for-usb
 
+          # Drop any managed save image left over from before a host upgrade
+          virsh managedsave-remove "${cfg.guestName}" >/dev/null 2>&1 || true
+
           # Start the VM
           echo "Starting VM '${cfg.guestName}'..."
           virsh start "${cfg.guestName}"

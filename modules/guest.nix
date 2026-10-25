@@ -170,6 +170,9 @@ in
           exit 0
         fi
 
+        # Drop any managed save image left over from before a host upgrade
+        virsh managedsave-remove "${cfg.name}" >/dev/null 2>&1 || true
+
         echo "Starting VM '${cfg.name}'..."
         virsh start "${cfg.name}"
         echo "VM '${cfg.name}' started successfully."
