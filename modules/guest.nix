@@ -128,6 +128,7 @@ in
           --import \
           --os-variant generic \
           --network bridge=${cfg.bridge},model=virtio \
+          --controller type=usb,model=qemu-xhci \
           --boot uefi \
           --graphics none \
           --noautoconsole
