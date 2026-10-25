@@ -113,61 +113,21 @@ in
         waitForUsbScript
       ];
 
-      # Only create autostart-with-usb service when automount is enabled
-      systemd.services.haos-autostart-with-usb = lib.mkIf cfg.automount.enable {
-        description = "Wait for USB devices, then autostart Home Assistant OS guest VM";
-        after = [
-          "libvirtd.service"
-          "haos-install-guest.service"
-          "systemd-udev-settle.service"
-        ];
-        requires = [ "libvirtd.service" ];
-        wantedBy = [ "multi-user.target" ];
-
-        path = [ pkgs.libvirt pkgs.usbutils ];
-
-        serviceConfig = {
-          Type = "oneshot";
-          RemainAfterExit = true;
-        };
-
-        script = ''
-          set -euo pipefail
-
-          # Wait for the VM to exist (created by haos-install-guest)
-          if ! virsh dominfo "${cfg.guestName}" >/dev/null 2>&1; then
-            echo "VM '${cfg.guestName}' does not exist, cannot autostart." >&2
-            exit 1
-          fi
-
-          # Check if already running
-          state=$(virsh domstate "${cfg.guestName}" 2>/dev/null || echo "unknown")
-          if [ "$state" = "running" ]; then
-            echo "VM '${cfg.guestName}' is already running."
-            exit 0
-          fi
-
-          # Wait for USB devices to be available
-          echo "Waiting for USB devices to be available..."
-          ${waitForUsbScript}/bin/haos-wait-for-usb
-
-          # Drop any managed save image left over from before a host upgrade
-          virsh managedsave-remove "${cfg.guestName}" >/dev/null 2>&1 || true
-
-          # Start the VM
-          echo "Starting VM '${cfg.guestName}'..."
-          virsh start "${cfg.guestName}"
-          echo "VM '${cfg.guestName}' started successfully."
-        '';
-      };
+      # Wait for the USB devices before haos-autostart starts the VM
+      systemd.services.haos-autostart =
+        lib.mkIf (cfg.automount.enable && config.services.haos.guest.enable or false)
+          {
+            after = [ "systemd-udev-settle.service" ];
+            preStart = "${waitForUsbScript}/bin/haos-wait-for-usb";
+          };
 
       systemd.services.haos-automount = lib.mkIf cfg.automount.enable {
         description = "Attach USB devices to HAOS guest";
         after = [
-          "haos-autostart-with-usb.service"
+          "haos-autostart.service"
           "libvirtd.service"
         ];
-        wants = [ "haos-autostart-with-usb.service" ];
+        wants = [ "haos-autostart.service" ];
         wantedBy = [ "multi-user.target" ];
         path = [ pkgs.libvirt ];
         serviceConfig = {

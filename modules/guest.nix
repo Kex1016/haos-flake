@@ -7,7 +7,6 @@
 
 let
   cfg = config.services.haos.guest;
-  usbCfg = config.services.haos.usb;
 
   imageInfo = builtins.fromJSON (builtins.readFile ../image.json);
 
@@ -136,15 +135,16 @@ in
       '';
     };
 
-    # VM autostart service
-    # Only used when USB passthrough is NOT enabled (or automount is disabled)
-    systemd.services.haos-autostart = lib.mkIf (!(usbCfg.enable && usbCfg.automount.enable)) {
+    # VM autostart service. libvirt's own autostart is kept off so the two
+    # never race; usb.nix hooks the wait for USB devices into this unit.
+    systemd.services.haos-autostart = {
       description = "Autostart Home Assistant OS guest VM";
       after = [
         "libvirtd.service"
         "haos-install-guest.service"
       ];
       requires = [ "libvirtd.service" ];
+      wants = [ "haos-install-guest.service" ];
       wantedBy = [ "multi-user.target" ];
 
       path = [ pkgs.libvirt ];
@@ -152,6 +152,8 @@ in
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
+        Restart = "on-failure";
+        RestartSec = 10;
       };
 
       script = ''
@@ -162,6 +164,8 @@ in
           echo "VM '${cfg.name}' does not exist, cannot autostart." >&2
           exit 1
         fi
+
+        virsh autostart --disable "${cfg.name}" >/dev/null
 
         # Check if already running
         state=$(virsh domstate "${cfg.name}" 2>/dev/null || echo "unknown")
